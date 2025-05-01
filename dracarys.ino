@@ -57,24 +57,20 @@ struct par {
     enum  tipo       { lista(ENUM_ITEM) }; \
     char* tipo##_str[] { lista(ENUM_STR)  } \
 
+#define ITENS_PEDIDO(X) \
+    X(TRAS) \
+    X(FRENTE)
+ENUM(pedido, ITENS_PEDIDO);
+
 #define ITENS_FOGO(X) \
     X(PARADO_TRAS) \
     X(PARADO_FRENTE) \
     X(INDO) \
     X(VOLTANDO)
-/*
-#define ITENS_FALHA(X)
-    X(FALHA) \
-    X(RECUPERANDO) \
-    X(NORMAL)
-*/
-
 ENUM(estado_fogo, ITENS_FOGO);
+
 enum estado_fogo fogo = PARADO_TRAS;
 unsigned long fim_fogo = 0;
-
-// ENUM(estado_falha, ITENS_FALHA);
-// enum estado_falha falha = NORMAL;
 
 void setup() {
     pinMode(eixo_x_ch, INPUT);
@@ -95,54 +91,34 @@ void setup() {
     Serial.begin(115200);
 }
 
-// fazer: se o interruptor tiver no meio, usar o eixo x pra mexer os motores pra frente e pra trás
+//! se o interruptor tiver no meio, devia usar o eixo x pra mexer os motores pra frente e pra trás
 void loop() {
-    // lê o que o rádio manda como pulsos
+    // lê o que o rádio manda como pulsos e vê se tão chegando mesmo
     unsigned long pulso_fogo = pulseIn(fogo_ch,   HIGH, 20000);
     unsigned long pulso_x    = pulseIn(eixo_x_ch, HIGH, 20000);
     unsigned long pulso_y    = pulseIn(eixo_y_ch, HIGH, 20000);
-
-    // arma
-    static bool pedido_fogo_anterior = false;
     
     // failsafe // checa se teve timeout
     if (pulso_fogo + pulso_x + pulso_y == 0) {
-        pedido_fogo_anterior = false;
-        failsafe();
-        Serial.printf("tentando failsafe. %4lu, %4lu: %4lu: fogo=%s\n",
-                       pulso_x,pulso_y, pulso_fogo, estado_fogo_str[fogo]);
+        // desliga os motores e volta o motor de fogo
+        mover(0, 0);
+        esperar_fogo_desligar();
+
+        //! debug
+        Serial.printf("tentando failsafe: fogo=%s\n", estado_fogo_str[fogo]);
+
+        // tenta de novo
         return;
     }
 
     // arma
-    bool pedido_fogo = (pulso_fogo > PULSO_MED);
+    enum pedido pedido_fogo = pulso_fogo > PULSO_MED ? FRENTE : TRAS;
   #if defined(FOGO_MANUAL)
     if      (INTERRUPTOR_ALTO (pulso_fogo)) motor_fogo( PWM_MAX/3);
     else if (INTERRUPTOR_BAIXO(pulso_fogo)) motor_fogo(-PWM_MAX/3);
     else                                    motor_fogo(0);
   #else
-    // máquina de estados da arma
-    if (pedido_fogo != pedido_fogo_anterior) switch (fogo) {
-        case PARADO_FRENTE:
-            if (!pedido_fogo) {
-                fim_fogo = millis() + TEMPO_FOGO;
-                fogo_tras(); fogo = VOLTANDO;
-            }
-        break;
-        case PARADO_TRAS:
-            if (pedido_fogo) {
-                fim_fogo = millis() + TEMPO_FOGO;
-                fogo_frente(); fogo = INDO;
-            }
-        break;
-        default: break;
-    }
-    if (acabou_fogo()) switch (fogo) {
-        case INDO:     { motor_fogo(0); fogo = PARADO_FRENTE; } break;
-        case VOLTANDO: { motor_fogo(0); fogo = PARADO_TRAS;   } break;
-        default: break;
-    }
-    pedido_fogo_anterior = pedido_fogo;
+    fogo = pedir_fogo(pedido_fogo, fogo);
   #endif
 
     // movimento
@@ -155,30 +131,39 @@ void loop() {
                   pulso_x,pulso_y, vels.esq,vels.dir, pedido_fogo, estado_fogo_str[fogo]);
 }
 
-void failsafe() {
-    // salva o tempo que falta para terminar o movimento
-    unsigned long agora = millis();
-    unsigned long tempo_falta = fim_fogo - agora;
+//! devia voltar direto o tanto que precisa quando tá indo mas tem que voltar etc
+enum estado_fogo pedir_fogo(enum pedido pedido_atual, enum estado_fogo fogo_atual) {
+    if (fogo_atual == PARADO_FRENTE) {
+        if (pedido_atual == FRENTE) return fogo_atual;
 
-    // volta o que precisar com o motor do fogo
-    motor_fogo(0);
-    switch (fogo) {
-        case INDO:          { fim_fogo = agora + TEMPO_FOGO - tempo_falta; fogo_tras(); } break;
-        case PARADO_FRENTE: { fim_fogo = agora + TEMPO_FOGO;               fogo_tras(); } break;
-        default: break; //! tratar?
+        fim_fogo = millis() + TEMPO_FOGO;
+        fogo_tras(); return VOLTANDO;
     }
-    esperar_fogo();
+    if (fogo_atual == PARADO_TRAS) {
+        if (pedido_atual == TRAS) return fogo_atual;
 
-    // desliga os motores
-    motor_fogo(0);
-    mover(0, 0);
+        fim_fogo = millis() + TEMPO_FOGO;
+        fogo_frente(); return INDO;
+    }
 
-    // consistência de estados
-    fogo = PARADO_TRAS;
+    if (acabou_fogo()) {
+        motor_fogo(0);
+        if (fogo_atual == INDO)     return PARADO_FRENTE;
+        if (fogo_atual == VOLTANDO) return PARADO_TRAS;
+    }
+
+    Serial.printf(
+        "pedido: %s, atual: %s\n",
+        pedido_str[pedido_atual],
+        estado_fogo_str[fogo_atual]
+    );
+    return fogo_atual;
 }
 
-bool acabou_fogo()  { return millis() > fim_fogo; }
-void esperar_fogo() { while (!acabou_fogo());     }
+bool acabou_fogo() { return millis() > fim_fogo; }
+void esperar_fogo_desligar() { 
+    while (fogo != PARADO_TRAS) fogo = pedir_fogo(TRAS, fogo);
+}
 
 void motor_fogo(int16_t vel) {
     motor(fogo_m1,fogo_m2, vel);
