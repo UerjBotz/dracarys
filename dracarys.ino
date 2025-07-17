@@ -76,7 +76,7 @@ void setup() {
     pinMode(eixo_x_ch, INPUT);
     pinMode(eixo_y_ch, INPUT);
     pinMode(fogo_ch,   INPUT);
-    // pinMode(isqueiro_ch, INPUT);
+    pinMode(isqueiro_ch, INPUT);
     
     pinMode(roda_esq_m1, OUTPUT);
     pinMode(roda_esq_m2, OUTPUT);
@@ -86,7 +86,7 @@ void setup() {
     pinMode(fogo_m1, OUTPUT);
     pinMode(fogo_m2, OUTPUT);
 
-    // pinMode(isqueiro_fogo, OUTPUT);
+    pinMode(isqueiro_fogo, OUTPUT);
 
     Serial.begin(115200);
 }
@@ -94,13 +94,15 @@ void setup() {
 //! se o interruptor tiver no meio, devia usar o eixo x pra mexer os motores pra frente e pra trás
 void loop() {
     // lê o que o rádio manda como pulsos e vê se tão chegando mesmo
-    unsigned long pulso_fogo = pulseIn(fogo_ch,   HIGH, 20000);
-    unsigned long pulso_x    = pulseIn(eixo_x_ch, HIGH, 20000);
-    unsigned long pulso_y    = pulseIn(eixo_y_ch, HIGH, 20000);
+    unsigned long pulso_fogo = pulseIn(fogo_ch,     HIGH, 20000);
+    unsigned long pulso_x    = pulseIn(eixo_x_ch,   HIGH, 20000);
+    unsigned long pulso_y    = pulseIn(eixo_y_ch,   HIGH, 20000);
+    unsigned long pulso_isq  = pulseIn(isqueiro_ch, HIGH, 20000);
     
     // failsafe // checa se teve timeout
-    if (pulso_fogo + pulso_x + pulso_y == 0) {
+    if (pulso_fogo + pulso_x + pulso_y + pulso_isq == 0) {
         // desliga os motores e volta o motor de fogo
+        digitalWrite(isqueiro_fogo, 0);
         mover(0, 0);
         esperar_fogo_desligar();
 
@@ -120,6 +122,9 @@ void loop() {
   #else
     fogo = pedir_fogo(pedido_fogo, fogo);
   #endif
+
+    // isqueiro
+    digitalWrite(isqueiro_fogo, pulso_isq > PULSO_MED);
 
     // movimento
     struct par vels = mixar(pulsoPWM(pulso_x),
